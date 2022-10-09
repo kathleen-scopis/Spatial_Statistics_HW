@@ -1,0 +1,210 @@
+---
+title: "SS_Assignment1"
+author: "Kathleen Scopis"
+date: "2022-10-08"
+output: html_document
+---
+
+The following is a walk-through of the exploratory and regression analyses for Assignment 1.
+
+
+First is the exploratory analysis.  Here, we pull in the mean and standard deviation for each of the exploratory variables.
+
+
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+
+
+#read data
+data <- read.csv("RegressionData.csv")
+#Median house value
+mean(data$MEDHVAL)
+sd(data$MEDHVAL)
+
+#Number of households living in poverty
+mean(data$NBELPOV100)
+sd(data$NBELPOV100)
+
+#PCT of individuals with Bach or higher
+mean(data$PCTBACHMOR)
+sd(data$PCTBACHMOR)
+
+#PCT of vacant houses
+mean(data$PCTVACANT)
+sd(data$PCTVACANT)
+
+#PCT of single house units
+mean(data$PCTSINGLES)
+sd(data$PCTSINGLES)
+
+```
+
+
+Next, complete the log transformations on each dependent variable to see which normalize.  
+Before completing the translations, we must determine which variables carry values of 0, as these columns will need to use the log(1+[var]) function.
+Add these new variables to 
+
+```{r, include=TRUE}
+
+#Log transformations
+
+min(data$MEDHVAL)
+min(data$PCTBACHMOR)
+min(data$MEDHHINC)
+min(data$PCTVACANT)
+min(data$PCTSINGLES)
+min(data$NBELPOV100)
+
+data2 <- cbind(LOG_MEDHVAL=log(data$MEDHVAL), 
+               LOG_PCTBACHMOR=log(1+data$PCTBACHMOR), 
+               LOG_MEDHHINC=log(data$MEDHHINC),
+               LOG_PCTVACANT=log(1+data$PCTVACANT),
+               LOG_PCTSINGLES=log(1+data$PCTSINGLES),
+               LOG_NBELPOV100=log(1+data$NBELPOV100)
+               )
+
+data_logged <- cbind(data, data2)
+
+```
+
+
+
+Visualize the data using the plot() and hist() functions (i didn't think the barplot() graph looked good...)
+
+```{r setup, include=TRUE}
+barplot(data$MEDHVAL)
+
+  
+plot(data$MEDHVAL, 
+      main = "Median House Value (in $)", 
+      xlab = "",
+      ylab = "Value (in $)")
+plot(data$PCTBACHMOR, 
+      main="Percent of Population with Bach degree or higher", 
+      xlab = "",
+      ylab = "Percent")
+plot(data$NBELPOV100, 
+     main="Number of households with incomes below 100% poverty", 
+     xlab = "",
+     ylab = "# of Households")
+plot(data$PCTVACANT, 
+     main="Percent of Housing Units that are Vacant", 
+     xlab = "",
+     ylab = "# of Housing Units")
+plot(data$PCTSINGLES, 
+     main="Percent of Housing Units that are DSF", 
+     xlab = "",
+     ylab = "# of Housing Units")
+
+#Logged graphs
+hist(data_logged$LOG_MEDHVAL, 
+     main = "Median House Value - Log")
+hist(data_logged$LOG_PCTBACHMOR, 
+     main = "Percent of Population with Bach degree or higher - Log")
+hist(data_logged$LOG_NBELPOV100, 
+     main = "Number of households with incomes below 100% poverty - Log")
+hist(data_logged$LOG_PCTVACANT, 
+     main = "Percent of Housing Units that are Vacant - Log")
+hist(data_logged$LOG_PCTSINGLES, 
+     main = "Percent of Housing Units that are DSF - Log")
+
+
+
+hist(data_logged$MEDHVAL)
+hist(data_logged$PCTBACHMOR)
+hist(data_logged$NBELPOV100)
+hist(data_logged$PCTVACANT)
+hist(data_logged$PCTSINGLES)
+
+```
+
+Observe if the relationship between dependent variable and predictors are linear.
+```{r, include=TRUE}
+
+plot(data_logged$LOG_MEDHVAL, data_logged$PCTVACANT,
+     xlab = "Median Household Value-Log",
+     ylab = "% Vacant Housing Units")
+plot(data_logged$LOG_MEDHVAL, data_logged$PCTSINGLES,
+      xlab = "Median Household Value-Log",
+     ylab = "% of Housing Units that are DSF - Log")
+plot(data_logged$LOG_MEDHVAL, data_logged$PCTBACHMOR,
+     xlab = "Median Household Value-Log",
+     ylab = "% of Population with Bach degree or higher - Log")
+plot(data_logged$LOG_MEDHVAL, data_logged$LOG_NBELPOV100,
+     xlab = "Median Household Value-Log",
+     ylab = "Number of households with incomes below 100% poverty - Log")
+
+```
+
+Observe the Pearson Correlation for each of the variables using the cor() function.
+```{r, include=TRUE}
+
+cor(data_logged)
+
+```
+
+
+Finally, we begin to examine the trends in the data using ANOVA regression (lm() function) and stepwise regression (stepAIC() function).
+
+   In Eugene's example, he only includes MEDHVAL, PCTVACANT, and PCTBACHMOR as independent variables - I'm not sure why he removes PCTSINGLES - this could be another question to be answered. 
+   
+Stepwise regression allows us to see which variables are actually important to building an accurate model, while which ones may be dropped. We can see from the analysis that PCTVACANT is ultimately dropped, meaning it is the least significant for the model. 
+
+
+```{r, include=TRUE}
+
+#Anova Regression
+## why is PCTSINGLES not included?
+fit <- lm(LOG_MEDHVAL ~ PCTSINGLES + PCTVACANT + PCTBACHMOR, LOG_NBELPOV100, data=data_logged)
+
+summary(fit)
+anova(fit)
+fitted(fit)
+residuals(fit)
+rstandard(fit)
+
+
+#Stepwise Regression
+stepfit <- lm(LOG_MEDHVAL ~ PCTSINGLES + PCTVACANT + PCTBACHMOR, LOG_NBELPOV100, data=data_logged)
+
+
+step <- stepAIC(stepfit, direction = "both")
+step$anova
+
+```
+
+Finally, we can evaluate the model and its residuals.
+We observe that the second model is a better fit because it has lower residuals (11,414.37 vs. 13,676.84).  
+
+```{r, include=TRUE}
+#KFold Analysis
+#Model 1
+library("DAAG")
+kfoldfit <- lm(LOG_MEDHVAL ~ PCTSINGLES + PCTVACANT + PCTBACHMOR, LOG_NBELPOV100, data=data_logged)
+
+cv <- CVlm(data=data_logged, kfoldfit, m=5)
+
+#extract the MSEs
+mse <- attr(cv, "ms")
+mse
+
+rmse <- sqrt(mse)
+rmse
+
+#Model 2
+kfoldfit2 <- lm(LOG_MEDHHINC ~ PCTVACANT + MEDHHINC, data=data_logged)
+summary(kfoldfit2)
+
+cv2 <- CVlm(data=data_logged, kfoldfit2, m=5)
+summary(cv2)
+
+#Extract the MSEs...again
+mse2 <- attr(cv2, "ms")
+mse2
+
+rmse2 <- sqrt(mse2)
+rmse2
+
+```
+
