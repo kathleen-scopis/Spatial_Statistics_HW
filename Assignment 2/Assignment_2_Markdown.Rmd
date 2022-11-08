@@ -1,0 +1,405 @@
+---
+title: "Assignment_2_Markdown"
+author: "Kathleen Scopis"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# STEP 1
+
+install packages and load in data
+
+```{r warning=FALSE, message=FALSE, cache=FALSE}
+options(scipen=999)
+
+#install packages
+
+#install.packages(c("sp", "rgdal", "rgeos", "spdep", "spgwr", "tmap", "spatialreg", "lmtest", "whitestrap", "tseries"))
+                 
+library(sp)
+library(rgdal)
+library(rgeos)
+library(spdep)
+library(spgwr)
+library(tmap)
+library(spatialreg)
+library(whitestrap)
+library(lmtest)
+library(tseries)
+
+pallete1 <- c("#2596be","#76b5c5","#abdbe3") #blues
+pallete2 <- c("#e28743", "#eab676", "#eeeee4") #oranges
+pallete3 <- c("#873e23", "#e28743", "#eeeee4") #browns
+
+
+#read data
+shp <- readOGR('C:\\Users\\kathl\\OneDrive\\Desktop\\Spatial Statistics\\Assignment2\\Regression Data')
+names(shp@data)
+
+
+```
+
+
+#1.a
+present histograms for NBELPOV100, then its log transformation (after adding +1)
+
+```{r warning=FALSE, message=FALSE, cache=FALSE}
+
+#raw variable
+par(oma=c(0,0,2,0)) 
+par(mfrow=c(1,3)) 
+hist(shp@data$NBelPov100, breaks = 40, col = "#e28743",
+     main = "Number of households with 
+     income below 100% poverty",
+     xlab = "NBelPov100")
+
+#log transformation +1
+shp@data$Log_NBelPov100 <- log(shp@data$NBelPov100 + 1)
+shp@data$Log_MedHval <- log(shp@data$MEDHVAL + 1)
+
+#histograms
+par(oma=c(0,0,2,0)) 
+par(mfrow=c(1,3)) 
+hist(shp@data$Log_NBelPov100, breaks = 50,
+     main = "Log Transformation of the
+     # of Households Below Poverty",
+     xlab = "Log_NBelPov100",
+     col = "#eab676")
+
+```
+
+
+#1.b
+
+introducing queen neighbor relationships
+
+```{r warning=FALSE, message=FALSE, cache=FALSE}
+
+queen<-poly2nb(shp, row.names=shp$POLY_ID)
+summary(queen)
+
+#plot links
+plot(shp, col='grey90', lwd=2)
+xy<-coordinates(shp)
+par(mfrow=c(1,1)) 
+plot(queen, xy, col='#d74821', lwd=.1, add=TRUE)
+title(main='Contiguous Queen Neighbors')
+```
+
+
+it is observed that two regions only have one neighbor, while one region has as many as 27 direct queen neighbors - wow! 
+I want to go trick-or-treating with them!
+
+```{r warning=FALSE, message=FALSE, cache=FALSE}
+
+#see which region has only one neighbor
+smallestnbcard<-card(queen) #extract neighbor matrix
+smallestnb<-which(smallestnbcard == min(smallestnbcard)) #extract block groups with smallest number of neighbors
+fg<-rep('grey90', length(smallestnbcard))
+fg[smallestnb]<-'#873e23' #color block groups dark orange
+fg[queen[[smallestnb[1]]]]<-'#e28743' #color neighboring blocks light orange
+fg[queen[[smallestnb[2]]]]<-'#e28743'
+fg[queen[[smallestnb[3]]]]<-'#e28743'
+fg[queen[[smallestnb[4]]]]<-'#e28743'
+plot(shp, col=fg)
+title(main='Regions with only 1 neighbor')
+
+#see which region has most neighbors
+largestnbcard<-card(queen)
+largestnb<-which(largestnbcard == max(largestnbcard))
+fg1<-rep('grey90', length(largestnbcard))
+fg1[largestnb]<-'#873e23'
+fg1[queen[[largestnb]]]<-'#e28743'
+plot(shp, col=fg1)
+title(main='Region with 27 neighbors')
+```
+
+#1.c
+
+calculate global moran's i using queen weight matrix
+it is observed that the global moran's i for Log_MedHval is ~0.79.
+
+```{r warning=FALSE, message=FALSE, cache=FALSE}
+queenlist<-nb2listw(queen, style = 'W')
+moran(shp$Log_MedHval, queenlist, n=length(queenlist$neighbours), S0=Szero(queenlist))$`I` 
+
+moranMC<-moran.mc(shp$LNMEDHHINC, queenlist, nsim=999, alternative="two.sided")  #We use 999 permutations
+moranMC
+
+moranMCres<-moranMC$res
+hist(moranMCres, freq=10000000, nclass=100,
+     col = "#e28743" )   #Draws distribution of Moran's I's calculated from randomly permuted values
+# Here, we draw a red vertical line at the observed value of our Moran's I
+abline(v=moran(shp$LNMEDHHINC, queenlist, n=length(queenlist$neighbours), S0=Szero(queenlist))$`I`, col='#c63112')
+
+moran.plot(shp$LNMEDHHINC, queenlist, xlab = "LNMEDHHINC") 
+```
+
+
+#1.d
+run local moran's I (LISA - Local Indicator of Spatial Association) analysis using Queen weight matrix.
+is there spatial autocorrelation?  let's check the map...
+we have also included a spatial association map, which projects areas that have high/high, high/low, low/low, and low/high relationships to their neighboring regions.
+
+```{r warning=FALSE, message=FALSE, cache=FALSE}
+#Run local moran's I (LISA) 
+LISA<-localmoran(shp$Log_MedHval, queenlist)
+head(LISA)
+df.LISA <-cbind(shp, as.data.frame(LISA))
+
+
+
+moranSig.plot<-function(df,listw, title){
+  local<-localmoran(x=df$Log_MedHval, listw=listw, zero.policy = FALSE)
+  moran.map<-cbind(df, local)
+  #Here, col='Pr.z....E.Ii..' is the name of the column in the dataframe df.LISA that we're trying to plot. This variable name might change based on the version of the package.
+  tm<-tm_shape(moran.map)+
+    tm_borders(col='white')+
+    tm_fill(style='fixed', col='Pr.z....E.Ii..', breaks=c(0,0.001, 0.01, 0.05, 1), title= 'p-value', palette = '-BuPu')+
+    tm_layout(frame = FALSE, title = title)
+  print(tm)
+}
+moranSig.plot(df.LISA, queenlist, 'p-value')
+
+
+#spatial association map 
+hl.plot<-function(df, listw){
+  local<-localmoran(x=df$Log_MedHval, listw=listw, zero.policy = FALSE)
+  quadrant<-vector(mode='numeric', length=323)
+  m.prop<-df$Log_MedHval - mean(df$Log_MedHval)
+  m.local<-local[,1]-mean(local[,1])
+  signif<-0.05
+  quadrant[m.prop >0 & m.local>0]<-4 #high MEDHHINC, high clustering
+  quadrant[m.prop <0 & m.local<0]<-1 #low MEDHHINC, low clustering
+  quadrant[m.prop <0 & m.local>0]<-2 #low MEDHINC, high clustering
+  quadrant[m.prop >0 & m.local<0]<-3 #high MEDHHINC, low clustering
+  quadrant[local[,5]>signif]<-0
+  
+  brks <- c(0,1,2,3,4)
+  colors <- c("grey","light blue",'blue','pink',"red")
+  plot<-plot(shp,border="gray90",lwd=1.0,col=colors[findInterval(quadrant,brks,all.inside=FALSE)])
+}
+
+hl.plot(shp, queenlist)
+legend("bottomright",legend=c("insignificant","low-high","low-low","high-low","high-high"),
+       fill=c("grey", "light blue", "blue", "pink", "red"),bty="n", cex = .8)
+
+```
+
+#1.e
+OLS Regression
+
+```{r warning=FALSE, message=FALSE, cache=FALSE}
+reg<-lm(formula=Log_MedHval ~ Log_NBelPov100 + PCTBACHMOR + PCTSINGLES + PCTVACANT, data=shp@data)
+summary(reg)
+
+
+
+##Prints the log likelihood
+#logLik(reg)                  
+##Prints the results of the Breusch-Pagan Test to assess whether heteroscedasticity is present (package: lmtest)
+#bptest(reg, studentize=FALSE)
+##Prints the results of the Koenker-Bassett Test (also known as the Studentized Breusch-Pagan Test) to assess #whether heteroscedasticity is present (package: lmtest)
+#bptest(reg)       
+##Prints the results of the White Test to assess whether heteroscedasticity is present (package: whitestrap)
+#white_test(reg)   
+##Prints the results of the Jarque-Bera Test to assess whether residuals are normal (package: tseries)
+#jarque.bera.test(reg$residuals)
+```
+
+#1.f CHECK
+
+not sure if this section is correct - are these the proper weighted residuals?
+line 223
+
+Standardized OLS Residuals (OLS Model residuals divided by an estimate of their standard deviation) 
+  There appears to be some autocorrelation.
+
+```{r warning=FALSE, message=FALSE, cache=FALSE}
+standardised<-rstandard(reg)
+resnb<-sapply(queen, function(x) mean(standardised[x]))
+
+shp@data$standardised <- standardised    #creating a new variable in the shapefile shp.
+OLS.Residuals.Map<-tm_shape(shp)+
+  tm_fill(col='standardised', style='quantile', title='Standardized OLS Residuals', 
+          palette ='Blues')+
+  tm_layout(frame=FALSE, title = 'Standardised OLS Residuals')
+OLS.Residuals.Map
+
+```
+
+Regress the standardized OLS residuals on the spatial lag of the OLS residuals.
+
+```{r warning=FALSE, message=FALSE, cache=FALSE}
+#Regressing residuals on their nearest neighbors.
+res.lm <- lm(formula=standardised ~ resnb)
+summary(res.lm)
+```
+
+
+#1.g CHECK
+Calculate Moran's I statistic and a pseudo p-value.
+
+```{r warning=FALSE, message=FALSE, cache=FALSE}
+moran.mc(standardised, queenlist, 999, alternative="two.sided")
+moran.plot(standardised, queenlist)
+```
+
+#1.h  CHECK - IS THIS CORRECT? (MIXED UP SPATIAL LAG AND SPATIAL ERROR) + ADD MAP
+Moran's I of Spatial Lag Model residuals. (Again, looking at the map of the Spatial Error Model residuals is an exercise left for the student.)
+
+```{r warning=FALSE, message=FALSE, cache=FALSE}
+reslag<-lagreg$residuals
+lagMoranMc<-moran.mc(reslag, queenlist,999, alternative="two.sided")
+lagMoranMc
+
+# Add map here
+
+```
+
+
+#1.i  CHECK - are the spatial lag residual regressions correct?  is this the right way to run 999 permutations?
+Spatial Lag Regression
+
+```{r warning=FALSE, message=FALSE, cache=FALSE}
+
+
+lagreg<-lagsarlm(formula=Log_MedHval ~ Log_NBelPov100 + PCTBACHMOR + PCTSINGLES + PCTVACANT, data=shp@data,
+               queenlist)
+summary(lagreg)
+LR.Sarlm(lagreg, reg) #Here lagreg is the SL output; reg is the OLS output
+#Prints the results of the Breusch-Pagan Test to assess whether heteroscedasticity is present (package: lmtest)
+bptest.Sarlm(lagreg, studentize=FALSE)
+#Prints the results of the Koenker-Bassett Test (also known as the Studentized Breusch-Pagan Test) to assess whether heteroscedasticity is present (package: lmtest)
+bptest.Sarlm(lagreg)       
+#Prints the results of the Jarque-Bera Test to assess whether residuals are normal (package: tseries)
+jarque.bera.test(lagreg$residuals)
+
+
+
+# 999 permutations - is this missing something?  is this correct?
+
+reslag<-lagreg$residuals
+lagMoranMc<-moran.mc(reslag, queenlist,999, alternative="two.sided")
+lagMoranMc
+
+```
+
+
+1.j CHECK - MIXED UP SPATIAL LAG AND SPATIAL ERROR
+Spatial Error Regression
+
+
+```{r warning=FALSE, message=FALSE, cache=FALSE}
+errreg<-errorsarlm(formula=Log_MedHval ~ Log_NBelPov100 + PCTBACHMOR + PCTSINGLES + PCTVACANT, data=shp@data,
+                   queenlist)
+reserr<-residuals(errreg)
+errresnb<-sapply(queen, function(x) mean(reserr[x]))
+summary(errreg)
+LR.Sarlm(errreg, reg)
+#Prints the results of the Breusch-Pagan Test to assess whether heteroscedasticity is present (package: lmtest)
+bptest.Sarlm(errreg, studentize=FALSE)
+#Prints the results of the Koenker-Bassett Test (also known as the Studentized Breusch-Pagan Test) to assess whether heteroscedasticity is present (package: lmtest)
+bptest.Sarlm(errreg)       
+#Prints the results of the Jarque-Bera Test to assess whether residuals are normal (package: tseries)
+jarque.bera.test(errreg$residuals)
+
+
+
+errMoranMc<-moran.mc(reserr, queenlist, 999, alternative="two.sided")
+errMoranMc
+```
+
+
+#2
+GWR - Geographically Weighted Regression
+
+
+```{r warning=FALSE, message=FALSE, cache=FALSE}
+#Setting an adaptive bandwidth
+bw<-gwr.sel(formula=Log_MedHval ~ Log_NBelPov100 + PCTBACHMOR + PCTSINGLES + PCTVACANT, 
+            data=shp@data,
+            method = "aic",
+            adapt = TRUE)
+bw
+
+
+
+#setting a fixed bandwidth
+bw_fixed<-gwr.sel(formula=Log_MedHval ~ Log_NBelPov100 + PCTBACHMOR + PCTSINGLES + PCTVACANT, 
+            data=shp@data,
+            method = "aic",
+            adapt = FALSE)
+bw_fixed
+
+
+#Adaptive Bandwidth
+
+gwrmodel<-gwr(formula=LNMEDHHINC~LNMEDHVAL+PCTVACANT,
+              data=shp,
+              adapt = bw, #adaptive bandwidth determined by proportion of observations accounted for
+              gweight=gwr.Gauss,
+              se.fit=TRUE, #to return local standard errors
+              hatmatrix = TRUE)
+gwrmodel
+
+
+#Fixed Bandwidth
+
+gwrmodel_fixed<-gwr(formula=LNMEDHHINC~LNMEDHVAL+PCTVACANT,
+              data=shp,
+              bandwidth = bw_fixed, #fixed bandwidth
+              gweight=gwr.Gauss,
+              se.fit=TRUE, #to return local standard errors
+              hatmatrix = TRUE)
+gwrmodel_fixed
+
+
+#GWR Output
+summary(gwrmodel$SDF)
+
+############################  QUESTION: Do we plug in the predictive variables here?
+
+#map standardized coefficients
+gwrresults<-as.data.frame(gwrmodel$SDF)
+shp$coefLNMEDHVALst<-gwrresults$LNMEDHVAL/gwrresults$LNMEDHVAL_se
+shp$coefPCTVACANTst<-gwrresults$PCTVACANT/gwrresults$PCTVACANT_se
+
+shp$gwrE<-gwrresults$gwr.e
+shp$localR2<-gwrresults$localR2
+
+coefLNMEDHVAL<-tm_shape(shp)+
+  tm_fill(col='coefLNMEDHVALst', breaks=c(-Inf, -6, -4, -2, 0, 2, 4, 6, Inf), title='Standardized coefficient of LNMEDHVAL', 
+          palette ='-RdBu')+
+  tm_layout(frame=FALSE, title = 'Median House Value (Log)')
+
+coefPCTVACANT<-tm_shape(shp)+
+  tm_fill(col='coefPCTVACANTst', breaks=c(-Inf, -6, -4, -2, 0, 2, 4, 6, Inf), title='Standardized coefficient of PCTVACANT', 
+          palette='-RdBu')+
+  tm_layout(frame=FALSE, title = 'Percentage of Housing Vacant')
+
+tmap_arrange(coefLNMEDHVAL, coefPCTVACANT, ncol=2)
+
+tm_shape(shp)+
+  tm_fill(col='localR2',  breaks=c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7), n=5, palette = 'Blues')+
+  tm_layout(frame=FALSE)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
